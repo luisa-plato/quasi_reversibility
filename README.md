@@ -23,12 +23,12 @@ Add `--show` to open the figures after they are saved. They are written to the w
 
 ## Experiment
 
-The final time is $T = 1$. The spatial discretization uses continuous piecewise linears on a uniform mesh with 32 cells in each direction, and the time step is $\Delta t = 0.01$. Terminal data are obtained by integrating the forward heat equation with implicit Euler. Noise levels run from \(10^{-1}\) to \(10^{-15}\), in the second Dirichlet eigenmode, scaled so that the perturbation has \(L^5\)-norm \(\delta\). The regularization parameter is
+The final time is $T = 1$. The spatial discretization uses continuous piecewise linears on a uniform mesh with 32 cells in each direction, and the time step is $\Delta t = 0.01$. Terminal data are obtained by integrating the forward heat equation with implicit Euler. Noise levels run from $10^{-1}$ to $10^{-15}$, in the second Dirichlet eigenmode, scaled so that the perturbation has $L^5$-norm $\delta$. The regularization parameter is
 
-\[
+$$
 \alpha(\delta) = T \Big/ \log\Big(\frac{a}{\delta\,(\log 1/\delta)^{\nu}}\Big),
-\]
+$$
 
-with \(a = \nu = 1\). The computed \(L^5\) error is compared with \(c/\log(1/\delta)\), using \(c = 1.2\) in one space dimension and \(c = 4\) in two.
+with $a = \nu = 1$. The computed $L^5$ error is compared with $c/\log(1/\delta)$, using $c = 1.2$ in one space dimension and $c = 4$ in two.
 
 This code accompanies the paper *Quasi-reversibility for the backward heat equation in Banach spaces*.
