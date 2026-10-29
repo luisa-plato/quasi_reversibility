@@ -23,6 +23,10 @@ on Omega = (0, pi) and Omega = (0, pi)^2 is demonstrated. The exact solutions ar
     u(x, t)     = exp(-t) sin(x)           on (0, pi),
     u(x, y, t)  = exp(-2t) sin(x) sin(y)   on (0, pi)^2.
 
+The terminal datum is the exact solution at t = T interpolated onto the finite
+element space. In 2D the mesh is quadrilateral with Q1 elements. Besides the figures,
+VTK time series of the exact solution and of every backward solve are written.
+
 Requires Firedrake (https://www.firedrakeproject.org/) and matplotlib.
 
     python QR_backward_diffusion.py --dim 1
@@ -53,7 +57,9 @@ from firedrake import (
     grad,
     inner,
     sin,
+    exp
 )
+from firedrake.output import VTKFile
 from firedrake.pyplot import tripcolor
 
 #--------------------set some constants and parameters--------------------
@@ -67,11 +73,8 @@ S_PURPLE = "#800080"
 S_GREEN = "#008000"
 CURVE_COLOURS = (S_ORANGE, S_PURPLE, S_GREEN)
 
-# ||sin(n x)||_{L^5(0, pi)} = (16/15)^{1/5}. On the square the integral separates and the norm is the product of the 1D norms.
-_L5_INTEGRAL_1D = 16.0 / 15.0
-
 # Prefactors of the comparison curve c / log(1/delta). 
-COMPARISON_CONSTANTS = {1: 1.2, 2: 4.0}
+COMPARISON_CONSTANTS = {1: 1.2, 2: 4.6}
 
 # Which noise levels are drawn, as indices into delta = 10^{-1}, ..., 10^{-15}.
 # One dimension: 1e-1, 1e-2, 1e-7
@@ -79,7 +82,7 @@ COMPARISON_CONSTANTS = {1: 1.2, 2: 4.0}
 _PLOT_FIELDS_1D = (0, 1, 6)
 _PLOT_FIELDS_2D = (0, 2, 14)
 
-#--------------------define some helperfunctions--------------------
+#--------------------define some helper functions--------------------
 def add_legend(ax, **kwargs):
     """Legend with an opaque backing, so lines do not run through the text."""
     return ax.legend(
@@ -95,31 +98,6 @@ def lp_norm(field, p: float) -> float:
     """||field||_{L^p}. For a real field, |field|^p = (field, field)^{p/2}."""
     integrand = inner(field, field) ** (p / 2) * dx
     return float(assemble(integrand) ** (1.0 / p))
-
-
-# def _eigenmode_expression(coords, dim: int, wavenumber: int):
-#     """prod_{i=1}^{dim} sin(wavenumber * x_i), an eigenfunction of -Delta."""
-#     expression = sin(wavenumber * coords[0])
-#     for i in range(1, dim):
-#         expression = expression * sin(wavenumber * coords[i])
-#     return expression
-
-
-#def _noise_amplitude(delta: float, dim: int) -> float:
-#    """
-#    Coefficient of the perturbation mode.
-#
-#    Dividing by the L^5 norm of that mode makes the perturbation itself
-#    have L^5 norm equal to ``delta`` in one dimension. In two dimensions
-#    the same normalization is used and then multiplied by 2, which is the
-#    factor the published figures were computed with: the L^5 norm of the
-#    two-dimensional noise is therefore ``2 * delta``.
-#    """
-#    if dim == 1:
-#        return delta / (_L5_INTEGRAL_1D ** (1.0 / 5.0))
-#    # (16/15)^2 = 256/225 = ||sin(nx) sin(ny)||_{L^5}^5
-#    return 2.0 * delta / ((256.0 / 225.0) ** (1.0 / 5.0))
-
 
 #--------------------define the quasi-reversibility problem--------------------
 class QuasiReversibility:
@@ -141,14 +119,13 @@ class QuasiReversibility:
         if dim == 1:
             self.mesh = IntervalMesh(resolution, 0.0, np.pi)
         else:
-            self.mesh = SquareMesh(resolution, resolution, np.pi)
+            self.mesh = SquareMesh(resolution, resolution, np.pi, quadrilateral=True)
 
         self.dim = dim
         self.final_time = float(final_time)
         self.degree = degree
         self.V = FunctionSpace(self.mesh, "CG", degree)
         self.bc = DirichletBC(self.V, Constant(0.0), "on_boundary")
-        self.coords = SpatialCoordinate(self.mesh)
 
         # Snap dt so that an integer number of steps lands exactly on T.
         self.num_steps = max(1, int(round(self.final_time / dt)))
@@ -159,7 +136,7 @@ class QuasiReversibility:
 
     def initial_state(self) -> Function:
         """
-        Define initial state as a sinus function.
+        Define initial state as a sine function.
         """
         if self.dim == 1:
             x, = SpatialCoordinate(self.mesh)
@@ -169,42 +146,47 @@ class QuasiReversibility:
             expression = sin(x) * sin(y)
         return Function(self.V).interpolate(expression)
 
+    def exact_terminal(self) -> Function:
+        """
+        Define exact terminal state as a sine function.
+        """
+        if self.dim == 1:
+            x, = SpatialCoordinate(self.mesh)
+            expression = exp(-self.final_time) * sin(x)
+        elif self.dim == 2:
+            x,y = SpatialCoordinate(self.mesh)
+            expression = exp(-2*self.final_time) * sin(x) * sin(y)
+        return Function(self.V).interpolate(expression)
+
     def perturb(self, terminal: Function, delta: float) -> Function:
         """
         Copy the terminal Function and add a delta perturbation.
         """
         perturbed = Function(self.V, name=f"terminal_delta_{delta:g}")
-        dim = self.V.mesh().topological_dimension
-        if dim == 1:
-            x, = SpatialCoordinate(self.V.mesh())
+        if self.dim == 1:
+            x, = SpatialCoordinate(self.mesh)
             perturbed.interpolate(terminal + (delta/(16.0/15.0)**(1/5)) * sin(2*x))
-        elif dim == 2:
-            x,y = SpatialCoordinate(self.V.mesh())
+        elif self.dim == 2:
+            x,y = SpatialCoordinate(self.mesh)
             perturbed.interpolate(terminal + delta/(256.0/225.0)**(1/5) * sin(2*x) * sin(2*y))
         return perturbed
 
-    def solve_forward(self, initial: Function) -> Function:
+    def write_exact(self, initial: Function, output: VTKFile) -> None:
         """
-        Integrate the forward heat equation from ``initial`` up to time T.
+        Write the exact solution exp(-dim t) u_0 on the time grid of ``solve_QR``.
         """
-        inv_dt = Constant(1.0 / self.dt)
-        u_prev = Function(self.V)
-        u_prev.assign(initial)
-        u_next = Function(self.V)
+        exact = Function(self.V, name="u_exact")
+        for n in range(self.num_steps + 1):
+            t = self.final_time - n * self.dt
+            exact.assign(np.exp(-self.dim * t) * initial)
+            output.write(exact, time=t)
 
-        # (u^{n+1} - u^n)/dt - Delta u^{n+1} = 0.
-        a = (
-            inv_dt * inner(self._trial, self._test)
-            + inner(grad(self._trial), grad(self._test))
-        ) * dx
-        L = inv_dt * inner(u_prev, self._test) * dx
-
-        for _ in range(self.num_steps):
-            solve(a == L, u_next, self.bc)
-            u_prev.assign(u_next)
-        return u_prev
-
-    def solve_QR(self, terminal: Function, alpha: float) -> Function:
+    def solve_QR(
+        self,
+        terminal: Function,
+        alpha: float,
+        output: VTKFile | None = None,
+    ) -> Function:
         """
         Recover an approximation of u(·, 0) from terminal data.
 
@@ -216,14 +198,20 @@ class QuasiReversibility:
 
         which is the weak form of the quasi-reversibility equation
         (I - alpha Delta) phi = v and v_new = v - dt Delta phi.
+
+        If ``output`` is given, the state is written at every time step.
         """
         inv_dt = Constant(1.0 / self.dt)
         alpha_c = Constant(alpha)
 
-        state = Function(self.V)
+        state = Function(self.V, name="u_alpha_delta")
         state.assign(terminal)
         phi = Function(self.V)
         updated = Function(self.V)
+
+        def write(t: float) -> None:
+            if output is not None:
+                output.write(state, time=t)
 
         # (I - alpha Delta) phi = state, homogeneous Dirichlet conditions.
         a_phi = (
@@ -239,10 +227,12 @@ class QuasiReversibility:
             + inv_dt * inner(state, self._test)
         ) * dx
 
-        for _ in range(self.num_steps):
+        write(self.final_time)
+        for n in range(self.num_steps):
             solve(a_phi == L_phi, phi, self.bc)
             solve(a_state == L_state, updated, self.bc)
             state.assign(updated)
+            write(self.final_time - (n + 1) * self.dt)
         return state
 
 #--------------------define plotting functions--------------------
@@ -411,7 +401,7 @@ def demonstrate_convergence(
 ):
     """
     Sweep delta from 10^{-1} down to 10^{-15} and plot the L^p error.
-    ``comparison_constant`` defaults to 1.2 in 1D and 4 in 2D.
+    ``comparison_constant`` defaults to 1.2 in 1D and 4.6 in 2D.
     Figures are written in the working directory. Set ``show=True`` to
     open them as well.
     """
@@ -425,14 +415,17 @@ def demonstrate_convergence(
 
     problem = QuasiReversibility(dim, T, dt, resolution, degree)
     initial = problem.initial_state()
-    terminal = problem.solve_forward(initial)
+    terminal = problem.exact_terminal()
+
+    problem.write_exact(initial, VTKFile(f"exact_dim_{dim}.pvd"))
 
     perturbed = []
     recovered = []
     errors = []
-    for delta, alpha in zip(deltas, alphas):
+    for i, (delta, alpha) in enumerate(zip(deltas, alphas), start=1):
         noisy = problem.perturb(terminal, float(delta))
-        approximation = problem.solve_QR(noisy, float(alpha))
+        output = VTKFile(f"qr_dim_{dim}_delta_1e-{i}.pvd")
+        approximation = problem.solve_QR(noisy, float(alpha), output=output)
         perturbed.append(noisy)
         recovered.append(approximation)
         errors.append(lp_norm(initial - approximation, norm_p))

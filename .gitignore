@@ -1,0 +1,5 @@
+.DS_Store
+*.pvd
+exact_dim_*/
+qr_dim_*/
+__pycache__/
